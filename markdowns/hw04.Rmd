@@ -1,0 +1,48 @@
+---
+title: "hw04"
+author: "Henry Chen"
+date: "2026-09-13"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_download: true
+    code_folding: show
+    theme: simplex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r hw04}
+library(RSQLite)
+con = DBI::dbConnect(RSQLite::SQLite(), "../data/midwest_airbnb.db")
+listings = DBI::dbReadTable(con, "listings")
+```
+
+
+```{r}
+sum(listings$city == "Columbus")
+```
+
+
+```{r}
+listings$name[listings$city == "Chicago" &
+              listings$price == max(listings$price[listings$city == "Chicago"],
+                                    na.rm = TRUE)]
+```
+
+```{r}
+length(unique(listings$neighbourhood[listings$city == "Chicago"]))
+```
+
+```{r}
+sum(listings$host_is_superhost == "t", na.rm = TRUE)
+```
+
+
+```{r}
+sum(listings$price > 1000, na.rm = TRUE)
+```
