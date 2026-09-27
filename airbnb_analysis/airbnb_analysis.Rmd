@@ -1,0 +1,237 @@
+---
+title: "airbnb_analysis"
+author: "Henry Chen"
+date: "2026-09-27"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_download: true
+    code_folding: show
+    theme: simplex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+con = DBI::dbConnect(
+  RSQLite::SQLite(),
+  "../data/midwest_airbnb_extended.db"
+)
+
+listings = DBI::dbReadTable(con, "listings") |>
+  tibble::as_tibble()
+
+availability = DBI::dbReadTable(con, "availability_monthly") |>
+  tibble::as_tibble()
+
+reviews = DBI::dbReadTable(con, "reviews_monthly") |>
+  tibble::as_tibble()
+
+DBI::dbDisconnect(con)
+```
+
+
+# Task 1
+```{r}
+host_counts = listings |>
+  dplyr::count(host_id, name = "host_listings")
+
+host_counts |>
+  dplyr::filter(host_listings >= 10) |>
+  dplyr::summarize(hosts_10_plus = dplyr::n())
+
+listings_hosts = listings |>
+  dplyr::left_join(host_counts, by = "host_id")
+
+listings_hosts |>
+  dplyr::filter(city == "Chicago") |>
+  dplyr::summarize(
+    percent = 100 * mean(host_listings >= 10)
+  )
+```
+
+
+# Task 2
+```{r}
+family_homes = listings |>
+  dplyr::filter(
+    room_type == "Entire home/apt",
+    accommodates >= 4,
+    number_of_reviews >= 10,
+    review_scores_rating >= 4.8
+  ) |>
+  dplyr::mutate(
+    price_per_person = price / accommodates
+  )
+
+family_neighborhoods = family_homes |>
+  dplyr::group_by(city, neighbourhood) |>
+  dplyr::summarize(
+    median_price_per_person = median(price_per_person, na.rm = TRUE),
+    n = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::filter(n >= 20)
+
+family_neighborhoods |>
+  dplyr::filter(city == "Columbus") |>
+  dplyr::arrange(median_price_per_person)
+```
+
+
+# Task 3
+```{r}
+earnings = listings |>
+  dplyr::group_by(city, room_type) |>
+  dplyr::summarize(
+    dplyr::across(
+      c(price, reviews_per_month, estimated_revenue_l365d),
+      ~ median(.x, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  )
+
+earnings |>
+  dplyr::filter(
+    city == "Twin Cities",
+    room_type == "Entire home/apt"
+  )
+```
+
+
+# Task 4
+```{r}
+revenue_ranked = listings |>
+  dplyr::group_by(city) |>
+  dplyr::arrange(
+    dplyr::desc(estimated_revenue_l365d),
+    .by_group = TRUE
+  ) |>
+  dplyr::mutate(
+    rank = dplyr::row_number(),
+    cutoff = ceiling(0.10 * dplyr::n()),
+    top_10 = rank <= cutoff
+  ) |>
+  dplyr::ungroup()
+
+revenue_share = revenue_ranked |>
+  dplyr::group_by(city) |>
+  dplyr::summarize(
+    top_10_revenue = sum(estimated_revenue_l365d[top_10], na.rm = TRUE),
+    total_revenue = sum(estimated_revenue_l365d, na.rm = TRUE),
+    percent = 100 * top_10_revenue / total_revenue,
+    .groups = "drop"
+  )
+
+revenue_share
+```
+
+
+# Task 5
+```{r}
+october = availability |>
+  dplyr::filter(month == "2026-10")
+
+entire_homes = listings |>
+  dplyr::filter(room_type == "Entire home/apt")
+
+october_homes = entire_homes |>
+  dplyr::inner_join(october, by = "id") |>
+  dplyr::mutate(
+    mostly_taken = nights_available < 0.5 * nights_in_month
+  )
+
+october_homes |>
+  dplyr::group_by(city) |>
+  dplyr::summarize(
+    share = 100 * mean(mostly_taken),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(share)
+```
+
+
+# Task 6
+```{r}
+monthly_demand = reviews |>
+  dplyr::inner_join(
+    listings |>
+      dplyr::select(id, city),
+    by = "id"
+  ) |>
+  dplyr::filter(
+    month >= "2025-07",
+    month <= "2026-06"
+  ) |>
+  dplyr::group_by(city, month) |>
+  dplyr::summarize(
+    total_reviews = sum(reviews, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+twin_demand = monthly_demand |>
+  dplyr::filter(city == "Twin Cities") |>
+  dplyr::arrange(dplyr::desc(total_reviews))
+
+twin_demand
+
+twin_demand |>
+  dplyr::summarize(
+    ratio = max(total_reviews) / min(total_reviews)
+  )
+```
+
+
+# Task 7
+```{r}
+superhost = listings |>
+  dplyr::filter(
+    room_type == "Entire home/apt",
+    !is.na(host_is_superhost),
+    host_is_superhost %in% c("t", "f")
+  ) |>
+  dplyr::group_by(city, host_is_superhost) |>
+  dplyr::summarize(
+    median_price = median(price, na.rm = TRUE),
+    median_rating = median(review_scores_rating, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+superhost
+
+superhost_premium = superhost |>
+  dplyr::select(city, host_is_superhost, median_price) |>
+  tidyr::pivot_wider(
+    names_from = host_is_superhost,
+    values_from = median_price
+  ) |>
+  dplyr::mutate(
+    premium = t - f
+  )
+
+superhost_premium
+```
+
+
+# Task 8
+```{r}
+missing_availability = listings |>
+  dplyr::anti_join(
+    availability,
+    by = "id"
+  )
+
+missing_availability |>
+  dplyr::summarize(
+    missing = dplyr::n()
+  )
+
+missing_availability |>
+  dplyr::count(city) |>
+  dplyr::arrange(dplyr::desc(n))
+```
+
